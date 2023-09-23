@@ -1,0 +1,891 @@
+# libraries ---------------------------------------------------------------
+
+library(dplyr)
+library(plyr)
+library(stringr)
+library(purrr)
+library(lubridate)
+library(ggplot2)
+library(tm)
+library(SentimentAnalysis)
+library(SnowballC)
+library(reshape2)
+library(wordcloud)
+library(wordcloud2)
+library(tidyr)
+library(gridExtra)
+library(tidytext)
+library(e1071)  
+library(caret)
+library(syuzhet)
+library(pander)
+library(fmsb)
+
+
+set.seed(1234)
+# scarico dei dati --------------------------------------------------------
+
+worldcup<-read.csv2('worldcup.csv',sep=',')
+
+print ("Numero di tweets & variabili: ")
+dim(worldcup)
+
+print ("Struttura del dataset: ")
+str(worldcup)
+
+head(worldcup, 3)
+
+#scelta di variabii utili alle analisi
+
+worldcup<-worldcup[,c("Orig_Tweet","Tweet", "RTs", "Hashtags","Followers", "Date","UserMentionID")] 
+
+#rimozione duplicati
+
+nodup<-worldcup %>% distinct(worldcup$Orig_Tweet, .keep_all = TRUE)
+View(nodup)
+to.use<-nodup
+
+#densita dei tweet per giornata, alcuni gionri non hanno valori perche non ci sono state partite
+
+worldcup$Date[1]
+worldcup$Date[530000]
+
+to.use$giorno <- day(to.use$Date)
+to.use$hour <- hour(to.use$Date)
+View(to.use)
+
+pos.29<-which(to.use$giorno==29)
+to.use$giorno[pos.29]<-0
+pos.30<-which(to.use$giorno==30)
+to.use$giorno[pos.30]<-0  #a logica di grafico il giorno 30/06 è stato riportato come se fosse 00/07
+to.use$giorno[133390]<-16
+
+ggplot(to.use, aes(x = giorno)) + 
+  geom_density()
+to.use$giorno[133390]<-15 #per ragioni di grafico ho messo ultima obs pari a 16- poi riaggiusto
+
+#densita dei tweet per ora, alcuni giorni non hanno valori perche non ci sono state partite
+##0-1-2-3-4-10-11-15
+
+ggplot(to.use, aes(x = hour)) + 
+  geom_density()
+
+#densità per ora nei vari giorni insieme
+
+ggplot(data=to.use, aes(x = hour)) + 
+  geom_density(aes(fill=factor(giorno)), alpha=0.5)+
+  labs(title="ore",
+       x="Risposte corrette",
+       y="",
+       subtitle="Numero di risposte corrette", 
+       caption="Parole non parole - Density")
+
+
+# ggplot per ora nei vari giorni separato
+
+giorno0<-to.use[which(to.use$giorno==0),]
+giorno1<-to.use[which(to.use$giorno==1),]
+giorno2<-to.use[which(to.use$giorno==2),]
+giorno3<-to.use[which(to.use$giorno==3),]
+giorno4<-to.use[which(to.use$giorno==4),]
+giorno10<-to.use[which(to.use$giorno==10),]
+giorno11<-to.use[which(to.use$giorno==11),]
+giorno15<-to.use[which(to.use$giorno==15),]
+
+
+ggplot(data=giorno0, aes(x = hour)) + 
+  geom_density(aes(fill=factor(giorno)), alpha=0.5) + scale_x_continuous(breaks = seq(from=0, to=24, breaks=1))
+
+graf0<-ggplot(data=giorno0, aes(x = hour)) + scale_x_continuous(breaks = seq(from=0, to=24, breaks=1)) + 
+  geom_density(aes(fill=factor(giorno)), alpha=0.5)
+graf1<-ggplot(data=giorno1, aes(x = hour)) +  scale_x_continuous(breaks = seq(from=0, to=24, breaks=1)) + 
+  geom_density(aes(fill=factor(giorno)), alpha=0.5)
+graf2<-ggplot(data=giorno2, aes(x = hour)) +  scale_x_continuous(breaks = seq(from=0, to=24, breaks=1)) +
+  geom_density(aes(fill=factor(giorno)), alpha=0.5)
+graf3<-ggplot(data=giorno3, aes(x = hour)) +  scale_x_continuous(breaks = seq(from=0, to=24, breaks=1)) +
+  geom_density(aes(fill=factor(giorno)), alpha=0.5)
+graf4<-ggplot(data=giorno4, aes(x = hour)) +  scale_x_continuous(breaks = seq(from=0, to=24, breaks=1)) +
+  geom_density(aes(fill=factor(giorno)), alpha=0.5)
+graf10<-ggplot(data=giorno10, aes(x = hour)) +  scale_x_continuous(breaks = seq(from=0, to=24, breaks=1)) +
+  geom_density(aes(fill=factor(giorno)), alpha=0.5)
+graf11<-ggplot(data=giorno11, aes(x = hour)) +  scale_x_continuous(breaks = seq(from=0, to=24, breaks=1)) +
+  geom_density(aes(fill=factor(giorno)), alpha=0.5)
+graf15<-ggplot(data=giorno15, aes(x = hour)) +  scale_x_continuous(breaks = seq(from=0, to=24, breaks=1)) +
+  geom_density(aes(fill=factor(giorno)), alpha=0.5)
+
+grid.arrange(graf0,graf1,graf2,graf3,graf4,graf10,graf11,graf15, ncol = 2)
+
+# text cleaning  ----------------------------------------------------------
+
+summary(to.use$Tweet)
+text_corpus<-Corpus(VectorSource(to.use$Tweet)) #vettore di token
+text_corpus<-tm_map(text_corpus, tolower) #upper-case to lower-case
+text_corpus<-tm_map(text_corpus, removePunctuation) #punctuation
+text_corpus<-tm_map(text_corpus, removeNumbers) #numbers
+text_corpus<-tm_map(text_corpus, stripWhitespace) #whitespaces
+text_corpus <- tm_map(text_corpus, removeWords, 
+                      stopwords("english"))      #english stopwords
+text_corpus<- tm_map(text_corpus , removeWords, c("can","will","now","get","got", "one"))
+
+?textclean
+text_df <- data.frame(text_clean = get("content", text_corpus), 
+                      stringsAsFactors = FALSE)
+df_sent<- cbind.data.frame(to.use, text_df)
+
+
+
+?DocumentTermMatrix
+# un po' di text mining e text vizualization ---------------------------------------------------
+
+#create a dtm and clean. also here you have a possibility to clean
+dtm <- DocumentTermMatrix(text_corpus,
+                          control = list(tolower = TRUE, removePunctuation = TRUE,
+                                         removeNumbers= TRUE,stemming = TRUE ,stopwords = TRUE,minWordLength = 3))
+####some statistic
+?removeSparseTerms
+dtm1<-removeSparseTerms(dtm, 0.99)
+wordcount <- colSums(as.matrix(dtm1))
+topten <- head(sort(wordcount, decreasing=TRUE), 15)
+many <- head(sort(wordcount, decreasing=TRUE), 10000)
+
+dfplot <- as.data.frame(melt(topten))
+dfplot$word <- dimnames(dfplot)[[1]]
+
+
+fig <- ggplot(dfplot, aes(x=word, y=value)) + geom_bar(stat="identity")
+fig <- fig + xlab("Word in Corpus")
+fig <- fig + ylab("Count") + labs(title='Top 15 Words used thorugh the competition')
+print(fig)
+?ggplot
+#ordinate
+
+dfplot$word <- factor(dfplot$word,
+                      levels=dfplot$word[order(dfplot$value,
+                                               decreasing=TRUE)])
+
+fig <- ggplot(dfplot, aes(x=word, y=value, fill=colore)) + geom_bar(stat="identity")  +
+  xlab("Word in Corpus")+ ylab("Count") +scale_fill_discrete(labels = c("in-game events","team","objectives",
+                                                                        "football related","common words"))
+print(fig)
+
+colore<-c("lightblue", "lightblue","darkred","darkred","lightblue",
+          "lightgreen","lightgreen", "darkred","lightgreen","darkgoldenrod1",
+          "lightgreen","darkgoldenrod1","navyblue","lightgreen","lightgreen")
+
+dfplot <- as.data.frame(melt(many))
+dfplot$word <- dimnames(dfplot)[[1]]
+dfplot$word <- factor(dfplot$word,
+                      levels=dfplot$word[order(dfplot$value,
+                                               decreasing=TRUE)])
+
+fig <- ggplot(dfplot, aes(x=word, y=log(value))) + geom_bar(stat="identity")
+fig <- fig + xlab("Word in Corpus")
+fig <- fig + ylab("Count")+ 
+  theme(
+    axis.text.x=element_blank(),
+    axis.ticks.x=element_blank())
+print(fig)
+
+ggplot(dfplot, aes(x = 1:nrow(dfplot),y =log(value))) + geom_point()+ 
+  theme(
+    axis.text.x=element_blank(),
+    axis.ticks.x=element_blank())+
+  xlab("Word in Corpus")+
+  ylab("Log of the")
+
+#worldcloud
+set.seed(1234)
+wordcloud<- wordcloud(words = names(wordcount), freq = wordcount, min.freq = 1,
+                      max.words=200, random.order=FALSE, rot.per=0.35, 
+                      colors=brewer.pal(8, "Dark2"))
+sort(df_word2)
+which.max(df_word2$freq)
+df_word2<-data.frame(wordcount)
+df_word2<-data.frame(parole=rownames(df_word2), freq=df_word2$wordcount)
+wordcld2<- wordcloud2(data = df_word2, color='random-dark',ellipticity = 0.5, size=0.5)
+print(wordcld2)
+?wordcloud2
+
+# come separare gli hashtag -----------------------------------------------
+#la funzione crea una lista con tutti gli hashtag presenti senza ridondanze
+
+#We use lapply() to split each string into elements using strsplit().
+#We then use unlist() to flatten the list of lists into a single vector of all elements.
+#We extract the unique elements using the unique() function.
+#We create a data frame from the unique elements, with a single column named "UniqueElement".
+#When you run this code, you'll get a data frame with a single column containing all the unique names:
+#This data frame will have only unique names without redundancy. You can replace the strings vector with your actual data and use the result data frame for your further analysis or processing.
+#finally, the dataframe is converted in a single column ready to be used
+
+funz_hashtag <- function(strings) {
+  all_elements <- unlist(lapply(strings, function(string) {
+    strsplit(string, ",")[[1]]
+  }))
+  
+  unique_elements <- unique(all_elements)
+  
+  data_frame <- data.frame(all_elements)
+  
+  return(data_frame)
+}
+
+strings <- to.use$Hashtags
+
+list_hashtag <- funz_hashtag(strings)
+list_hashtag<-as.vector(list_hashtag)
+my_hashtag<-list_hashtag$all_elements
+my_hashtag<-tolower(my_hashtag)
+
+#controllo i vari hashtag per squadre
+
+valore_da_controllare <- "fra"
+
+# Verifica se il valore è presente nella lista
+if (valore_da_controllare %in% my_hashtag) {
+  print("Il valore è presente nella lista.")
+} else {
+  print("Il valore non è presente nella lista.")
+}
+
+#hashtag delle singole squadre
+
+russia_hashtag<-c('russia','rus','russian')
+francia_hashtag<-c('france','fra','francia','blues','lesblues')
+argentina_hashtag<-c('arg','argentina')
+uruguay_hashtag<-c('uruguay','uru')
+portogallo_hashtag<-c('por','portogallo')
+brasile_hashtag<-c('brasil','bra','bras')
+colombia_hashtag<-c('col','colombia')
+inghilterra_hashtag<-c('lions','eng','england')
+messico_hashtag<-c('mexico','mex')
+belgio_hashtag<-c('belgium','bel')
+giappone_hashtag<-c('japan','jap')
+spagna_hashtag<-c('spain','spa')
+russia_hashtag<-c('russia','rus')
+danimarca_hashtag<-c('danimarca','denmark','den')
+svezia_hashtag<-c('sweden','swe')
+svizzera_hashtag<-c('switzerland','swi')
+croazia_hashtag<-c('cro','croatia','croazia')
+
+
+funz_multiple_tag <- function(strings) {
+  all_elements <- unlist(lapply(strings, function(string) {
+    strsplit(string, ",")[[1]]
+  }))
+  data_frame <- data.frame(all_elements)
+  
+  return(data_frame)
+}
+
+
+stringa <- to.use$Hashtags
+multiple_list_hashtag <- funz_multiple_tag(stringa)
+multiple_vec_tag<-as.vector(list_hashtag)
+my_multiple_tag<-multiple_vec_tag$all_elements
+my_multiple_tag<-tolower(my_hashtag)
+
+
+# conteggio numero di tag per squadra -------------------------------------
+
+#conto parole che mi servono
+word_vector <- my_multiple_tag
+
+# List of words to count RUSSIA
+word_list <- russia_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(russia_list_counts <- word_counts[word_list])
+tot_rus<-sum(russia_list_counts)
+
+#..................................
+
+# List of words to count FRANCIA
+word_list <- francia_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(francia_list_counts <- word_counts[word_list])
+tot_fra<-sum(francia_list_counts)
+#..................................
+
+# List of words to count ARGENTINA
+word_list <- argentina_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(argentina_list_counts <- word_counts[word_list])
+tot_arg<-sum(argentina_list_counts)
+
+#..................................
+
+# List of words to count URUGUAY
+word_list <- uruguay_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(uruguay_list_counts <- word_counts[word_list])
+tot_uru<-sum(uruguay_list_counts)
+
+#..................................
+
+# List of words to count PORTOGALLO
+word_list <- portogallo_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(portogallo_list_counts <- word_counts[word_list])
+tot_por<-sum(portogallo_list_counts)
+
+#..................................
+
+# List of words to count BRASILE
+word_list <- brasile_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(brasile_list_counts <- word_counts[word_list])
+tot_bra<-sum(brasile_list_counts)
+
+#..................................
+
+# List of words to count COLOMBIA
+word_list <- colombia_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(colombia_list_counts <- word_counts[word_list])
+tot_col<-sum(colombia_list_counts)
+
+#..................................
+
+# List of words to count INGHILTERRA
+word_list <- inghilterra_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(inghilterra_list_counts <- word_counts[word_list])
+tot_ing<-sum(inghilterra_list_counts)
+
+#..................................
+
+# List of words to count MESSICO
+word_list <- messico_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(messico_list_counts <- word_counts[word_list])
+tot_mex<-sum(messico_list_counts)
+
+#..................................
+
+# List of words to count BELGIO
+word_list <- belgio_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(belgio_list_counts <- word_counts[word_list])
+tot_bel<-sum(belgio_list_counts)
+
+#..................................
+
+# List of words to count GIAPPONE
+word_list <- giappone_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(giappone_list_counts <- word_counts[word_list])
+tot_jap<-sum(giappone_list_counts)
+
+#..................................
+
+# List of words to count SPAGNA
+word_list <- spagna_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(spagna_list_counts <- word_counts[word_list])
+tot_spa<-sum(spagna_list_counts)
+
+#..................................
+
+# List of words to count RUSSIA
+word_list <- russia_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(russia_list_counts <- word_counts[word_list])
+tot_rus<-sum(russia_list_counts)
+
+#..................................
+
+# List of words to count DANIMARCA
+word_list <- danimarca_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(danimarca_list_counts <- word_counts[word_list])
+tot_dan<-sum(danimarca_list_counts)
+
+#..................................
+
+# List of words to count SVEZIA
+word_list <- svezia_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(svezia_list_counts <- word_counts[word_list])
+tot_sve<-sum(svezia_list_counts)
+
+#..................................
+
+# List of words to count SVIZZERA
+word_list <- svizzera_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(svizzera_list_counts <- word_counts[word_list])
+tot_swi<-sum(svizzera_list_counts)
+
+#..................................
+
+# List of words to count CROAZIA
+word_list <- croazia_hashtag
+
+# Count the occurrences of words in the list
+word_counts <- table(word_vector)
+
+# Extract counts for the words in your word list
+(croazia_list_counts <- word_counts[word_list])
+tot_cro<-sum(croazia_list_counts)
+
+
+
+df_plot<-data.frame(Squadre=c("ARG","BEL","BRA","COL","DAN","FRA","ING","JAP","MEX","POR","RUS",
+                              "SPA","SWE","SWI","URU","CRO"),
+                    ToT_tweets=c(tot_arg,tot_bel,tot_bra,tot_col,tot_dan,tot_fra,tot_ing,tot_jap,
+                                 tot_mex,tot_por,tot_rus,tot_spa,tot_sve,tot_swi,tot_uru, tot_cro),
+                    row.names = c("ARG","BEL","BRA","COL","DAN","FRA","ING","JAP","MEX","POR","RUS",
+                                  "SPA","SWE","SWI","URU", "CRO"))
+
+bplot_tweets4team <- ggplot(df_plot,aes(x = ToT_tweets, y = Squadre)) +
+  geom_bar(stat = "identity") + labs(title='Total of Tweets thorugh the Competition per Team')
+print(bplot_tweets4team)
+
+
+
+# text mining divided by team ---------------------------------------------
+
+# Funzione per trovare gli indici delle righe che contengono almeno una parola cercata
+find_rows_with_words <- function(data_column, search_words) {
+  indices <- numeric(0)
+  
+  for (i in 1:length(data_column)) {
+    attributi <- unlist(strsplit(data_column[i], ","))
+    if (any(search_words %in% attributi)) {
+      indices <- c(indices, i)
+    }
+  }
+  
+  return(indices)
+}
+
+word_sets<-list(attributi=  
+                  argentina_hashtag, belgio_hashtag,brasile_hashtag,colombia_hashtag,danimarca_hashtag,
+                francia_hashtag,inghilterra_hashtag,giappone_hashtag,messico_hashtag,portogallo_hashtag,
+                russia_hashtag,spagna_hashtag,svezia_hashtag,svizzera_hashtag,uruguay_hashtag, croazia_hashtag)
+
+
+# Creazione di una lista per salvare gli indici
+indices_list <- list()
+
+# Loop attraverso le serie di parole
+for (i in 1:length(word_sets)) {
+  search_words <- word_sets[[i]]
+  matching_indices <- find_rows_with_words(tolower(to.use$Hashtags), search_words)
+  indices_list[[paste("serie", i)]] <- matching_indices
+}
+
+
+squadra<-vector(length=length(to.use))
+squadra[indices_list$`serie 1`]<-"ARG"
+squadra[indices_list$`serie 2`]<-"BEL"
+squadra[indices_list$`serie 3`]<-"BRA"
+squadra[indices_list$`serie 4`]<-"COL"
+squadra[indices_list$`serie 5`]<-"DAN"
+squadra[indices_list$`serie 6`]<-"FRA"
+squadra[indices_list$`serie 7`]<-"ING"
+squadra[indices_list$`serie 8`]<-"JAP"
+squadra[indices_list$`serie 9`]<-"MEX"
+squadra[indices_list$`serie 10`]<-"POR"
+squadra[indices_list$`serie 11`]<-"RUS"
+squadra[indices_list$`serie 12`]<-"SPA"
+squadra[indices_list$`serie 13`]<-"SVE"
+squadra[indices_list$`serie 14`]<-"SWI"
+squadra[indices_list$`serie 15`]<-"URU"
+squadra[indices_list$`serie 16`]<-"CRO"
+squadra[133390]<-'FRA'
+to.use$tweet_riferito<-squadra
+
+
+# text mining per le final four -------------------------------------
+
+#FRANCIA
+
+idx_fra<-which(to.use$tweet_riferito=='FRA')
+cont_fra<-text_corpus$content[idx_fra]
+cont_fra<-Corpus(VectorSource(cont_fra))
+cont_fra<- tm_map(cont_fra , removeWords, c("can","will","now","get","got", "one"))
+
+dtm_fra <- DocumentTermMatrix(cont_fra,
+                              control = list(tolower = TRUE, removePunctuation = TRUE,
+                                             removeNumbers= TRUE,stemming = TRUE ,stopwords = TRUE,minWordLength = 3))
+
+dtm_fra<-removeSparseTerms(dtm_fra, 0.99)
+wordcount_fra<- colSums(as.matrix(dtm_fra))
+topten_fra<- head(sort(wordcount_fra, decreasing=TRUE), 10)
+many_fra<- head(sort(wordcount_fra, decreasing=TRUE), 10000)
+
+dfplot_fra <- as.data.frame(melt(topten_fra))
+dfplot_fra$word <- dimnames(dfplot_fra)[[1]]
+
+
+fig_fra <- ggplot(dfplot_fra, aes(x=word, y=value)) + geom_bar(stat="identity") +  xlab("Word in Corpus")+
+  ylab("Count")  + labs(title='Words in Tweets about France')
+print(fig_fra)
+
+
+#BELGIO
+idx_bel<-which(to.use$tweet_riferito=='BEL')
+cont_bel<-text_corpus$content[idx_bel]
+cont_bel<-Corpus(VectorSource(cont_bel))
+cont_bel<- tm_map(cont_bel, removeWords, c("can","will","now","get","got", "one"))
+dtm_bel <- DocumentTermMatrix(cont_bel,
+                              control = list(tolower = TRUE, removePunctuation = TRUE,
+                                             removeNumbers= TRUE,stemming = TRUE ,stopwords = TRUE,minWordLength = 3))
+
+dtm_bel<-removeSparseTerms(dtm_bel, 0.99)
+wordcount_bel<- colSums(as.matrix(dtm_bel))
+topten_bel <- head(sort(wordcount_bel, decreasing=TRUE), 10)
+many_bel <- head(sort(wordcount_bel, decreasing=TRUE), 10000)
+
+dfplot_bel<- as.data.frame(melt(topten_bel))
+dfplot_bel$word <- dimnames(dfplot_bel)[[1]]
+
+
+fig_bel<- ggplot(dfplot_bel, aes(x=word, y=value)) + geom_bar(stat="identity")
+fig_bel <- fig_bel + xlab("Word in Corpus")
+fig_bel <- fig_bel + ylab("Count") + labs(title='Words in Tweets about Belgium')
+print(fig_bel)
+
+#CROAZIA
+
+idx_cro<-which(to.use$tweet_riferito=='CRO')
+cont_cro<-text_corpus$content[idx_cro]
+cont_cro<-Corpus(VectorSource(cont_cro))
+cont_cro<- tm_map(cont_cro , removeWords, c("can","will","now","get","got", "one"))
+dtm_cro <- DocumentTermMatrix(cont_cro,
+                              control = list(tolower = TRUE, removePunctuation = TRUE,
+                                             removeNumbers= TRUE,stemming = TRUE ,stopwords = TRUE,minWordLength = 3))
+
+dtm_cro<-removeSparseTerms(dtm_cro, 0.99)
+wordcount_cro <- colSums(as.matrix(dtm_cro))
+topten_cro  <- head(sort(wordcount_cro , decreasing=TRUE), 10)
+many_cro  <- head(sort(wordcount_cro , decreasing=TRUE), 10000)
+
+dfplot_cro  <- as.data.frame(melt(topten_cro ))
+dfplot_cro $word <- dimnames(dfplot_cro )[[1]]
+
+
+fig_cro <- ggplot(dfplot_cro , aes(x=word, y=value)) + geom_bar(stat="identity")
+fig_cro <- fig_cro + xlab("Word in Corpus")
+fig_cro <- fig_cro + ylab("Count") +  labs(title='Words in Tweets about Croatia')
+print(fig_cro)
+
+#INGHILTERRA
+
+idx_ing<-which(to.use$tweet_riferito=='ING')
+cont_ing<-text_corpus$content[idx_ing]
+cont_ing<-Corpus(VectorSource(cont_ing))
+cont_ing<- tm_map(cont_ing , removeWords, c("can","will","now","get","got", "one"))
+dtm_ing <- DocumentTermMatrix(cont_ing,
+                              control = list(tolower = TRUE, removePunctuation = TRUE,
+                                             removeNumbers= TRUE,stemming = TRUE ,stopwords = TRUE,minWordLength = 3))
+
+dtm_ing<-removeSparseTerms(dtm_ing, 0.99)
+wordcount_ing<- colSums(as.matrix(dtm_ing))
+topten_ing  <- head(sort(wordcount_ing , decreasing=TRUE), 10)
+many_ing  <- head(sort(wordcount_ing , decreasing=TRUE), 10000)
+
+dfplot_ing  <- as.data.frame(melt(topten_ing ))
+dfplot_ing $word <- dimnames(dfplot_ing )[[1]]
+
+
+fig_ing <- ggplot(dfplot_ing , aes(x=word, y=value)) + geom_bar(stat="identity")
+fig_ing<- fig_ing + xlab("Word in Corpus")
+fig_ing <- fig_ing + ylab("Count")+ labs(title='Words in Tweets about England')
+print(fig_ing)
+
+
+# 1 il sentiment dei tweet rispecchiano la classifica finale? -------------
+#per ognuna delle 8 squadre faccio media sentimenti con i quattro vocabolari
+#di sentimento positivo o negativo e ne stilo la classicfica con un grafico 
+idx_uru<-which(to.use$tweet_riferito=='URU')
+idx_bra<-which(to.use$tweet_riferito=='BRA')
+idx_rus<-which(to.use$tweet_riferito=='RUS')
+idx_sve<-which(to.use$tweet_riferito=='SVE')
+
+
+#funzione per normalizzare
+normalize_and_combine <- function(score_vectors) {
+  normalized_scores <- lapply(score_vectors, function(scores) {
+    (scores - min(scores)) / (max(scores) - min(scores))
+  })
+  
+  combined_dataframe <- data.frame(sapply(normalized_scores, c))
+  colnames(combined_dataframe) <- paste0("lexicon_", seq_along(score_vectors))
+  
+  combined_dataframe$mean <- rowMeans(combined_dataframe)
+  
+  return(combined_dataframe)
+}
+
+# sentiment per squadra ---------------------------------------------------
+
+?get_sentiment
+#FRANCIA
+
+data_fra<-to.use[idx_fra,]
+data_fra$Tweet<-tolower(data_fra$Tweet)
+
+data_fra$Tweet[100]
+score_norm_fra
+
+fra_sentiment_sy <- get_sentiment(data_fra$Tweet, method="syuzhet")
+fra_sentiment_bi <- get_sentiment(data_fra$Tweet, method = "bing")
+fra_sentiment_af <- get_sentiment(data_fra$Tweet, method = "afinn")
+#devo normalizzare i dizionari uso metodo min-max
+# Normalize the scores for each lexicon
+
+score_norm_fra <- list(fra_sentiment_sy, fra_sentiment_bi, fra_sentiment_af)
+combined_dataframe_fra<- normalize_and_combine(score_norm_fra)
+
+
+med_fra<-combined_dataframe_fra$mean
+valore_fra<-sum(med_fra*data_fra$RTs)/sum(data_fra$RTs)
+
+#BELGIO
+data_bel<-to.use[idx_bel,]
+
+bel_sentiment_sy <- get_sentiment(data_bel$Tweet, method="syuzhet")
+bel_sentiment_bi <- get_sentiment(data_bel$Tweet, method = "bing")
+bel_sentiment_af <- get_sentiment(data_bel$Tweet, method = "afinn")
+#devo normalizzare i dizionari uso metodo min-max
+# Normalize the scores for each lexicon
+
+score_norm_bel <- list(bel_sentiment_sy, bel_sentiment_bi, bel_sentiment_af)
+combined_dataframe_bel<- normalize_and_combine(score_norm_bel)
+
+med_bel<-combined_dataframe_bel$mean
+valore_bel<-sum(med_bel*data_bel$RTs)/sum(data_bel$RTs)
+
+
+#CROAZIA
+
+data_cro<-to.use[idx_cro,]
+
+cro_sentiment_sy <- get_sentiment(data_cro$Tweet, method="syuzhet")
+cro_sentiment_bi <- get_sentiment(data_cro$Tweet, method = "bing")
+cro_sentiment_af <- get_sentiment(data_cro$Tweet, method = "afinn")
+#devo normalizzare i dizionari uso metodo min-max
+# Normalize the scores for each lexicon
+
+score_norm_cro <- list(cro_sentiment_sy, cro_sentiment_bi, cro_sentiment_af)
+combined_dataframe_cro<- normalize_and_combine(score_norm_cro)
+
+med_cro<-combined_dataframe_cro$mean
+valore_cro<-sum(med_cro*data_cro$RTs)/sum(data_cro$RTs)
+
+
+
+#INGHILTERRA
+data_ing<-to.use[idx_ing,]
+
+ing_sentiment_sy <- get_sentiment(data_ing$Tweet, method="syuzhet")
+ing_sentiment_bi <- get_sentiment(data_ing$Tweet, method = "bing")
+ing_sentiment_af <- get_sentiment(data_ing$Tweet, method = "afinn")
+#devo normalizzare i dizionari uso metodo min-max
+# Normalize the scores for each lexicon
+
+score_norm_ing <- list(ing_sentiment_sy, ing_sentiment_bi, ing_sentiment_af)
+combined_dataframe_ing<- normalize_and_combine(score_norm_ing)
+
+med_ing<-combined_dataframe_ing$mean
+valore_ing<-sum(med_ing*data_ing$RTs)/sum(data_ing$RTs)
+
+
+
+#URUGUAY
+data_uru<-to.use[idx_uru,]
+
+uru_sentiment_sy <- get_sentiment(data_uru$Tweet, method="syuzhet")
+uru_sentiment_bi <- get_sentiment(data_uru$Tweet, method = "bing")
+uru_sentiment_af <- get_sentiment(data_uru$Tweet, method = "afinn")
+#devo normalizzare i dizionari uso metodo min-max
+# Normalize the scores for each lexicon
+
+score_norm_uru <- list(uru_sentiment_sy, uru_sentiment_bi, uru_sentiment_af)
+combined_dataframe_uru<- normalize_and_combine(score_norm_uru)
+
+
+med_uru<-combined_dataframe_uru$mean
+valore_uru<-sum(med_uru*data_uru$RTs)/sum(data_uru$RTs)
+
+
+#BRASILE 
+data_bra<-to.use[idx_bra,]
+
+bra_sentiment_sy <- get_sentiment(data_bra$Tweet, method="syuzhet")
+bra_sentiment_bi <- get_sentiment(data_bra$Tweet, method = "bing")
+bra_sentiment_af <- get_sentiment(data_bra$Tweet, method = "afinn")
+#devo normalizzare i dizionari uso metodo min-max
+# Normalize the scores for each lexicon
+
+
+
+score_norm_bra <- list(bra_sentiment_sy, bra_sentiment_bi, bra_sentiment_af)
+combined_dataframe_bra<- normalize_and_combine(score_norm_bra)
+
+med_bra<-combined_dataframe_bra$mean
+valore_bra<-sum(med_bra*(data_bra$RTs+1))/sum(data_bra$RTs)
+
+
+data_bra$RTs[193]
+#RUSSIA 
+data_rus<-to.use[idx_rus,]
+
+rus_sentiment_sy <- get_sentiment(data_rus$Tweet, method="syuzhet")
+rus_sentiment_bi <- get_sentiment(data_rus$Tweet, method = "bing")
+rus_sentiment_af <- get_sentiment(data_rus$Tweet, method = "afinn")
+#devo normalizzare i dizionari uso metodo min-max
+# Normalize the scores for each lexicon
+
+score_norm_rus <- list(rus_sentiment_sy, rus_sentiment_bi, rus_sentiment_af)
+combined_dataframe_rus<- normalize_and_combine(score_norm_rus)
+
+
+med_rus<-combined_dataframe_rus$mean
+valore_rus<-sum(med_rus*data_rus$RTs)/sum(data_rus$RTs)
+
+
+#SVEZIA 
+data_sve<-to.use[idx_sve,]
+
+sve_sentiment_sy <- get_sentiment(data_sve$Tweet, method="syuzhet")
+sve_sentiment_bi <- get_sentiment(data_sve$Tweet, method = "bing")
+sve_sentiment_af <- get_sentiment(data_sve$Tweet, method = "afinn")
+#devo normalizzare i dizionari uso metodo min-max
+# Normalize the scores for each lexicon
+
+score_norm_sve <- list(sve_sentiment_sy, sve_sentiment_bi, sve_sentiment_af)
+combined_dataframe_sve<- normalize_and_combine(score_norm_sve)
+
+med_sve<-combined_dataframe_sve$mean
+valore_sve<-sum(med_sve*data_sve$RTs)/sum(data_sve$RTs)
+valore2<-mean((med_sve*data_sve$RTs)/(data_sve$RTs))
+valore_sve==valore2
+
+to.use$RTs[which(to.use$RTs==0)]<-1
+# grafico barplot ---------------------------------------------------------
+#il grafico ha totale tweet e retweet moltiplicati per il sentimento medio
+
+tot_tweet_fra<-sum(data_fra$RTs)
+tot_tweet_uru<-sum(data_uru$RTs)
+tot_tweet_bel<-sum(data_bel$RTs)
+tot_tweet_bra<-sum(data_bra$RTs)
+tot_tweet_ing<-sum(data_ing$RTs)
+tot_tweet_rus<-sum(data_rus$RTs)
+tot_tweet_sve<-sum(data_sve$RTs)
+tot_tweet_cro<-sum(data_cro$RTs)
+
+# Esempio di grafico a barre per confrontare i valori medi di sentiment
+barplot(rbind(mean(combined_dataframe_uru$mean)*tot_tweet_uru, mean(combined_dataframe_bel$mean)*tot_tweet_bel,
+              mean(combined_dataframe_bra$mean)*tot_tweet_bra, mean(combined_dataframe_cro$mean)*tot_tweet_cro,
+              mean(combined_dataframe_fra$mean)*tot_tweet_fra, mean(combined_dataframe_ing$mean)*tot_tweet_ing,
+              mean(combined_dataframe_rus$mean)*tot_tweet_rus, mean(combined_dataframe_sve$mean)*tot_tweet_sve),
+        beside = TRUE,
+        names.arg = c("URU", "BEL","BRA","CRO","FRA","ING","RUS","SVE"), legend.text = TRUE,
+        ylab = "Mean Sentiment", col=c('lightblue','red','lightgreen','white',
+                                       'blue','darkred','black','lightyellow'))
+
+
+
+barplot(rbind(BRA=valore_bra, ING=valore_ing, RUS=valore_rus, BEL=valore_bel,
+              FRA=valore_fra, CRO=valore_cro, URU=valore_uru, SVE=valore_sve),
+        beside=T, names.arg = c("BRA", "ING","RUS","BEL","FRA","CRO","URU","SVE"),
+        ylab="Sentiment Value", main='Barplot Sentiment for Team' ,ylim=c(0,0.6),col=c('lightblue','red','lightgreen','white',
+                                                   'blue','darkred','black','lightyellow'))
+
+
+data<-as.data.frame(rbind(BRA=valore_bra, ING=valore_ing, RUS=valore_rus, BEL=valore_bel,
+            FRA=valore_fra, CRO=valore_cro, URU=valore_uru, SVE=valore_sve))
+data$Team<-c("BRA","ING","RUS","BEL","FRA","CRO","URU","SVE")
+data$V1<-reorder(data$Team ,data$V1)
+?reorder
+
+data$Team <- factor(data$Team, levels = data$Team[order(data$V1, decreasing=T)])
+col<-c("chocolate","darkseagreen4","lightcoral", "indianred4",
+       "orange4", "maroon", "magenta4", "lightsalmon")
+
+ggplot(data, aes(x=V1, y=Team, fill=Team))+
+  labs(title='Barplot Sentiment for Team', x="Sentiment Value")+
+  geom_bar(stat="identity")+ scale_fill_manual(values=col)+ 
+  guides(fill=F)
+
+
+tot_tweet_bel
+tot_tweet_cro
+tot_tweet_bra
+tot_tweet_fra
+tot_tweet_ing
+tot_tweet_rus
+tot_tweet_sve
+
+
+
+
+
+
+grid.arrange(fig_fra, fig_cro, fig_bel, fig_ing, ncol=2)
